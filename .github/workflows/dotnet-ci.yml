@@ -1,0 +1,83 @@
+name: .NET CI Pipeline - medical_new
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      name: Checkout code
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore medical.sln
+
+    - name: Build solution
+      run: dotnet build medical.sln --no-restore --configuration Release
+
+    - name: Install Coverlet and ReportGenerator
+      run: |
+        dotnet tool install --global coverlet.console --version 6.0.0
+        dotnet tool install --global dotnet-reportgenerator-globaltool --version 5.3.0
+
+    - name: Run Unit Tests with Coverage
+      shell: pwsh
+      run: |
+        dotnet test `
+          test/test.csproj `
+          --no-build `
+          --configuration Release `
+          --collect:"XPlat Code Coverage" `
+          --settings "test/testsettings.runsettings" `
+          --results-directory "./TestResults" `
+          --logger "trx;LogFileName=test_results.trx" `
+          --verbosity normal
+
+    - name: Check Cobertura XML for View files
+      shell: pwsh
+      run: |
+        $coverageFile = Get-ChildItem -Path "./TestResults" -Recurse -Filter "coverage.cobertura.xml" | Select-Object -ExpandProperty FullName
+        if ($coverageFile) {
+            Write-Host "Found Cobertura XML at: $($coverageFile)"
+            Write-Host "--- Searching for 'Views' or 'xaml' in XML ---"
+            Get-Content $coverageFile | Select-String -Pattern "Views|xaml" -Context 0,5
+            Write-Host "--- End of search ---"
+        } else {
+            Write-Host "Cobertura XML file not found. Please check previous steps and paths."
+        }
+
+    - name: Generate Coverage Report
+      shell: pwsh
+      run: |
+        reportgenerator `
+          "-reports:./TestResults/**/coverage.cobertura.xml" `
+          "-targetdir:./CoverageReport" `
+          "-reporttypes:Html" `
+          "-assemblyfilters:+medical;+medical.ViewModels" `
+          "-filefilters:-*Tests;+*;-*Migrations*;**/*Views*/**"
+
+    - name: Upload Test Results Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: TestResults
+        path: TestResults/
+        retention-days: 5
+
+    - name: Upload Coverage Report Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: CodeCoverageReport
+        path: CoverageReport/
+        retention-days: 5
